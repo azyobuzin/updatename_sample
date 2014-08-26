@@ -1,11 +1,10 @@
 package main
 
 import (
-	"bytes"
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"regexp"
 	"strings"
@@ -56,38 +55,28 @@ func main() {
 var client = NewOAuthClientWithToken(consumerKey, consumerSecret, oauthToken, oauthTokenSecret)
 
 func connectUserStream(procLine func(b []byte)) {
-	req, e := client.MakeGetRequest("https://userstream.twitter.com/1.1/user.json", map[string][]string{})
-	if e != nil {
-		fmt.Println(e)
+	req, err := client.MakeGetRequest("https://userstream.twitter.com/1.1/user.json", map[string][]string{})
+	if err != nil {
+		fmt.Println(err)
 		return
 	}
 
-	res, e := http.DefaultClient.Do(req)
+	res, err := http.DefaultClient.Do(req)
 
-	if e != nil {
-		fmt.Println(e)
+	if err != nil {
+		fmt.Println(err)
 		return
 	}
 
-	buf := new(bytes.Buffer)
-	b := make([]byte, 1)
-	body := res.Body
-	defer body.Close()
-	for {
-		n, e := body.Read(b)
-		if e != nil {
-			fmt.Println(e)
-			break
-		}
+	defer res.Body.Close()
 
-		if b[0] == '\n' {
-			if buf.Len() > 0 {
-				procLine(buf.Bytes())
-				buf.Reset()
-			}
-		} else {
-			buf.Write(b[:n])
-		}
+	scanner := bufio.NewScanner(res.Body)
+	for scanner.Scan() {
+		go procLine([]byte(scanner.Text()))
+	}
+
+	if err = scanner.Err(); err != nil {
+		fmt.Println(err)
 	}
 }
 
@@ -102,32 +91,32 @@ type user struct {
 	Name       string `json:"name"`
 }
 
-func updateName(name string) error {
-	req, e := client.MakePostRequest("https://api.twitter.com/1.1/account/update_profile.json",
-		map[string][]string{"name": []string{name}})
+func requestRestApi(req *http.Request, v interface{}) error {
+	res, err := http.DefaultClient.Do(req)
 
-	if e != nil {
-		return e
-	}
-
-	res, e := http.DefaultClient.Do(req)
-
-	if e != nil {
-		return e
+	if err != nil {
+		return err
 	}
 
 	defer res.Body.Close()
-	b, e := ioutil.ReadAll(res.Body)
 
-	if e != nil {
-		return e
+	decoder := json.NewDecoder(res.Body)
+	return decoder.Decode(v)
+}
+
+func updateName(name string) error {
+	req, err := client.MakePostRequest("https://api.twitter.com/1.1/account/update_profile.json",
+		map[string][]string{"name": []string{name}})
+
+	if err != nil {
+		return err
 	}
 
 	u := new(user)
-	e = json.Unmarshal(b, u)
+	err = requestRestApi(req, u)
 
-	if e != nil {
-		return e
+	if err != nil {
+		return err
 	}
 	if u.Name != name {
 		return errors.New("Failed?")
@@ -137,31 +126,18 @@ func updateName(name string) error {
 }
 
 func updateStatus(text string, inReplyToStatusId uint64) error {
-	req, e := client.MakePostRequest("https://api.twitter.com/1.1/statuses/update.json",
+	req, err := client.MakePostRequest("https://api.twitter.com/1.1/statuses/update.json",
 		map[string][]string{"status": []string{text}, "in_reply_to_status_id": []string{fmt.Sprint(inReplyToStatusId)}})
 
-	if e != nil {
-		return e
-	}
-
-	res, e := http.DefaultClient.Do(req)
-
-	if e != nil {
-		return e
-	}
-
-	defer res.Body.Close()
-	b, e := ioutil.ReadAll(res.Body)
-
-	if e != nil {
-		return e
+	if err != nil {
+		return err
 	}
 
 	s := new(status)
-	e = json.Unmarshal(b, s)
+	err = requestRestApi(req, s)
 
-	if e != nil {
-		return e
+	if err != nil {
+		return err
 	}
 	if s.Id == 0 {
 		return errors.New("Failed?")
